@@ -49,7 +49,7 @@ struct TodayView: View {
                            unit: "kcal",
                            caption: energyCaption(summary))
 
-                HStack(spacing: 10) {
+                AdaptiveStack {
                     ForEach([Nutrient.protein, .carbohydrate, .fat]) { nutrient in
                         MetricTile(nutrient: nutrient,
                                    value: summary.total(nutrient).map { "\(Fmt.number($0)) g" },
@@ -106,13 +106,13 @@ struct TodayView: View {
     }
 
     private var header: some View {
-        HStack {
+        AdaptiveStack(spacing: 8) {
             Label("Health Companion", systemImage: "leaf.fill")
                 .font(.system(.title3, design: .rounded, weight: .bold))
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .accessibilityAddTraits(.isHeader)
-            Spacer(minLength: 8)
             if let goal = store.profile?.primaryGoal {
                 Label(goal.title, systemImage: goal.symbol)
                     .font(.footnote.weight(.semibold))
@@ -139,6 +139,8 @@ struct TodayView: View {
                     VStack(spacing: 6) {
                         Text(day.formatted(.dateTime.weekday(.abbreviated)))
                             .font(.caption)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.7)
                             .foregroundStyle(selected ? Color.primary : Color.secondary)
                         Text(day.formatted(.dateTime.day()))
                             .font(.subheadline.weight(.semibold))
@@ -159,6 +161,8 @@ struct TodayView: View {
                 .accessibilityAddTraits(selected ? [.isSelected] : [])
             }
         }
+        // Seven days must fit across the screen, so this strip stops growing; each day is read out in full.
+        .dynamicTypeSize(...DynamicTypeSize.xxLarge)
     }
 
     private var dayPhrase: String {
@@ -191,23 +195,27 @@ struct DecisionCard: View {
 
     var body: some View {
         if let assessment = store.assessment(for: decision) {
-            HStack(alignment: .top, spacing: 8) {
-                NavigationLink {
+            NavigationLink {
                     SavedAssessmentView(assessment: assessment, decision: decision)
                 } label: {
                     VStack(alignment: .leading, spacing: 10) {
-                        HStack(alignment: .firstTextBaseline) {
+                        AdaptiveStack(alignment: .firstTextBaseline, spacing: 8) {
                             Text(assessment.label.productName)
                                 .font(.subheadline.weight(.medium))
                                 .multilineTextAlignment(.leading)
-                            Spacer(minLength: 8)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .frame(maxWidth: .infinity, alignment: .leading)
                             Text(decision.timestamp.formatted(.dateTime.day().month(.abbreviated).hour().minute()))
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
+                        .padding(.trailing, onDelete == nil ? 0 : 36)
                         Label(energyText(assessment), systemImage: "flame.fill")
                             .font(.headline)
-                        HStack(spacing: 12) {
+                            .multilineTextAlignment(.leading)
+                            .fixedSize(horizontal: false, vertical: true)
+                        AdaptiveStack(spacing: 12) {
+                          HStack(spacing: 12) {
                             ForEach([Nutrient.protein, .carbohydrate, .fat]) { nutrient in
                                 HStack(spacing: 4) {
                                     Image(systemName: nutrient.symbol)
@@ -216,9 +224,12 @@ struct DecisionCard: View {
                                 }
                                 .font(.footnote)
                                 .accessibilityElement(children: .ignore)
+                                .lineLimit(1)
+                                .fixedSize()
                                 .accessibilityLabel("\(nutrient.title) \(assessment.calculation.value(nutrient)?.text ?? "not known")")
                             }
-                            Spacer(minLength: 0)
+                          }
+                          .frame(maxWidth: .infinity, alignment: .leading)
                             Text(decision.action.title)
                                 .font(.caption.weight(.semibold))
                                 .padding(.horizontal, 10)
@@ -230,19 +241,20 @@ struct DecisionCard: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-
+            .card(padding: 16)
+            .overlay(alignment: .topTrailing) {
                 if let onDelete {
                     Button(role: .destructive, action: onDelete) {
                         Image(systemName: "trash")
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
-                            .frame(width: 36, height: 36)
+                            .frame(width: 44, height: 44)
                     }
                     .buttonStyle(.plain)
+                    .padding(4)
                     .accessibilityLabel("Delete \(assessment.label.productName)")
                 }
             }
-            .card(padding: 16)
         }
     }
 
@@ -425,6 +437,7 @@ struct WeeklyEnergyCard: View {
             }
             .padding(4)
             .background(Theme.chip, in: Capsule())
+            .dynamicTypeSize(...DynamicTypeSize.xxLarge)
 
             Footnote(unknown > 0
                      ? "Only items you saved as eaten are counted. \(unknown) of them had no energy figure for the saved portion and are left out, not counted as zero."

@@ -67,6 +67,22 @@ struct CardPage<Content: View>: View {
     }
 }
 
+/// Side by side at ordinary text sizes, stacked when the user has chosen an accessibility text size.
+struct AdaptiveStack<Content: View>: View {
+    @Environment(\.dynamicTypeSize) private var typeSize
+    var alignment: VerticalAlignment = .center
+    var spacing: CGFloat = 10
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        if typeSize.isAccessibilitySize {
+            VStack(alignment: .leading, spacing: spacing) { content }
+        } else {
+            HStack(alignment: alignment, spacing: spacing) { content }
+        }
+    }
+}
+
 struct SectionTitle: View {
     let text: String
     init(_ text: String) { self.text = text }
@@ -109,9 +125,10 @@ struct InfoRow: View {
     let value: String
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 12) {
-            Text(title).foregroundStyle(.secondary)
-            Spacer(minLength: 8)
+        AdaptiveStack(alignment: .firstTextBaseline, spacing: 4) {
+            Text(title)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
             Text(value).multilineTextAlignment(.trailing)
         }
         .font(.subheadline)
@@ -338,5 +355,7 @@ struct FloatingTabBar: View {
         .padding(.horizontal, 20)
         .padding(.top, 6)
         .padding(.bottom, 2)
+        // Like the system tab bar, this stays compact; labels are still read out in full.
+        .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
     }
 }

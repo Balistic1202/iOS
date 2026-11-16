@@ -1,5 +1,12 @@
 import SwiftUI
 
+/// Label photos for one scan. Held in memory only and gone when the flow closes.
+/// A reference type, so every screen in the flow reads the current photos.
+@Observable
+final class ScanPhotos {
+    var images: [UIImage] = []
+}
+
 /// Capture, confirm, then assess. Nothing is stored unless the user saves a decision at the end.
 struct ScanFlow: View {
     enum Route: Hashable {
@@ -10,14 +17,13 @@ struct ScanFlow: View {
     @Environment(\.dismiss) private var dismiss
     @State private var path: [Route] = []
     @State private var draft = LabelDraft()
-    /// Label photos for this scan. Held in memory only and gone when the flow closes.
-    @State private var images: [UIImage] = []
+    @State private var photos = ScanPhotos()
 
     var body: some View {
         NavigationStack(path: $path) {
             CaptureView { chosen, image in
                 draft = chosen
-                images = image.map { [$0] } ?? []
+                photos.images = image.map { [$0] } ?? []
                 path = [.confirm]
             }
             .toolbar {
@@ -28,12 +34,12 @@ struct ScanFlow: View {
             .navigationDestination(for: Route.self) { route in
                 switch route {
                 case .confirm:
-                    ConfirmLabelView(draft: $draft, images: $images) { confirmed in
+                    ConfirmLabelView(draft: $draft, images: Binding(get: { photos.images }, set: { photos.images = $0 })) { confirmed in
                         // The label travels with the route, so the destination never reads stale state.
                         path.append(.assessment(confirmed))
                     }
                 case .assessment(let label):
-                    AssessmentScreen(label: label, image: images.first) { dismiss() }
+                    AssessmentScreen(label: label, image: photos.images.first) { dismiss() }
                 }
             }
         }
@@ -283,6 +289,7 @@ struct AssessmentScreen: View {
     }
 
     @Environment(AppStore.self) private var store
+    @Environment(\.dismiss) private var dismiss
     let label: ConfirmedLabel
     /// The first label photo of this scan, shown as a header. Memory only; never stored.
     var image: UIImage?
@@ -311,9 +318,9 @@ struct AssessmentScreen: View {
             VStack(spacing: 0) {
                 hero
                 VStack(alignment: .leading, spacing: 14) {
-                    AssessmentTitleCard(assessment: current)
-                    portionCard
+                    AssessmentTitleCard(assessment: current) { dismiss() }
                     AssessmentNutrition(assessment: current)
+                    portionCard
                     AssessmentDetails(assessment: current)
                     Footnote("Saving is optional. Nothing is kept unless you save, and the app never assumes you ate something you scanned.")
                         .padding(.horizontal, 4)
@@ -325,11 +332,12 @@ struct AssessmentScreen: View {
                 .padding(.top, -30)
             }
         }
+        .ignoresSafeArea(edges: .top)
         .background(Theme.background.ignoresSafeArea())
         .scrollDismissesKeyboard(.interactively)
+        .overlay(alignment: .top) { topButtons }
         .safeAreaInset(edge: .bottom, spacing: 0) { actions(current) }
-        .navigationTitle("Assessment")
-        .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.hidden, for: .navigationBar)
         .onChange(of: portion) {
             // A changed portion is a new assessment; any earlier saved snapshot stays as it was.
             assessmentID = UUID()
@@ -340,10 +348,12 @@ struct AssessmentScreen: View {
         }
     }
 
+    /// The label photo fills the top of the screen, under the status bar. Without a photo
+    /// (a sample or a label typed by hand) a soft placeholder takes its place.
     @ViewBuilder private var hero: some View {
         if let image {
             Color.clear
-                .frame(height: 250)
+                .frame(height: 360)
                 .overlay {
                     Image(uiImage: image)
                         .resizable()
@@ -352,17 +362,51 @@ struct AssessmentScreen: View {
                 .clipped()
                 .accessibilityLabel("Your label photo. It is not saved.")
         } else {
-            LinearGradient(colors: [Color.orange.opacity(0.25), Color.pink.opacity(0.15), Theme.accent.opacity(0.2)],
+            LinearGradient(colors: [Color.orange.opacity(0.3), Color.pink.opacity(0.18), Theme.accent.opacity(0.25)],
                            startPoint: .topLeading, endPoint: .bottomTrailing)
-                .frame(height: 130)
+                .frame(height: 300)
                 .overlay {
-                    Image(systemName: "text.viewfinder")
-                        .font(.system(size: 40, weight: .light))
-                        .foregroundStyle(.secondary)
-                        .padding(.bottom, 24)
+                    VStack(spacing: 8) {
+                        Image(systemName: "photo")
+                            .font(.system(size: 40, weight: .light))
+                        Text("No photo for this label")
+                            .font(.footnote)
+                    }
+                    .foregroundStyle(.secondary)
+                    .padding(.top, 30)
                 }
                 .accessibilityHidden(true)
         }
+    }
+
+    private var topButtons: some View {
+        HStack {
+            Button {
+                dismiss()
+            } label: {
+                circleIcon("arrow.left")
+            }
+            .accessibilityLabel("Back to the label")
+            Spacer()
+            Menu {
+                Button("Edit the label", systemImage: "pencil") { dismiss() }
+                Button("Close without saving", systemImage: "xmark", action: onDone)
+            } label: {
+                circleIcon("ellipsis")
+            }
+            .accessibilityLabel("More")
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 16)
+        .padding(.top, 4)
+    }
+
+    private func circleIcon(_ name: String) -> some View {
+        Image(systemName: name)
+            .font(.body.weight(.semibold))
+            .foregroundStyle(.primary)
+            .frame(width: 44, height: 44)
+            .background(.ultraThinMaterial, in: Circle())
     }
 
     private var portionCard: some View {
@@ -410,9 +454,7 @@ struct AssessmentScreen: View {
                 Button("Done", action: onDone)
                     .buttonStyle(PrimaryButtonStyle())
             } else {
-                HStack(spacing: 10) {
-                    Button("Done", action: onDone)
-                        .buttonStyle(SecondaryButtonStyle())
+                Group {
                     Menu {
                         ForEach(DecisionAction.allCases) { action in
                             Button(action.title) {
@@ -443,12 +485,27 @@ struct AssessmentScreen: View {
 
 struct AssessmentTitleCard: View {
     let assessment: Assessment
+    /// When set, a pencil button takes the user back to correct the label.
+    var onEdit: (() -> Void)?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(assessment.label.productName)
-                .font(.system(.title2, design: .rounded, weight: .bold))
-                .accessibilityAddTraits(.isHeader)
+            HStack(alignment: .firstTextBaseline) {
+                Text(assessment.label.productName)
+                    .font(.system(.title2, design: .rounded, weight: .bold))
+                    .accessibilityAddTraits(.isHeader)
+                Spacer(minLength: 8)
+                if let onEdit {
+                    Button(action: onEdit) {
+                        Image(systemName: "pencil")
+                            .font(.title3.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 36, height: 36)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Edit the label")
+                }
+            }
             if assessment.label.isSample { SampleBadge() }
             PrototypeBanner(text: "Draft assessment. Not clinically reviewed advice.")
         }
@@ -460,37 +517,109 @@ struct AssessmentTitleCard: View {
 /// otherwise the label's own figures. An unknown value is a dash, never a zero.
 struct AssessmentNutrition: View {
     let assessment: Assessment
+    @Environment(\.dynamicTypeSize) private var typeSize
+    @State private var page: Int? = 0
 
     private var showsPortion: Bool { assessment.calculation.blocked == nil }
     private var basisCaption: String {
-        showsPortion ? "For your portion: \(assessment.calculation.portion.text)"
-                     : "As printed on the label, \(assessment.label.basis.title)"
+        showsPortion ? "for your portion: \(assessment.calculation.portion.text)"
+                     : "as printed on the label, \(assessment.label.basis.title)"
     }
 
     private func shown(_ fact: FactLine) -> NutrientValue? {
         showsPortion ? fact.portionValue : fact.labelValue
     }
 
+    /// Three tiles per page. Nutrients in the user's focus come first, then protein, carbohydrate and fat.
+    private var pages: [[FactLine]] {
+        let order: [Nutrient] = [.protein, .carbohydrate, .fat, .totalSugars, .addedSugars, .fibre, .saturatedFat, .salt]
+        let facts = order.compactMap { nutrient in assessment.facts.first { $0.nutrient == nutrient } }
+        let sorted = facts.filter(\.isFocus) + facts.filter { !$0.isFocus }
+        return stride(from: 0, to: sorted.count, by: 3).map { Array(sorted[$0..<min($0 + 3, sorted.count)]) }
+    }
+
     var body: some View {
         let energy = assessment.facts.first { $0.nutrient == .energy }
         let energyValue = energy.flatMap(shown)
-        EnergyCard(value: energyValue.map { Fmt.number($0.amount) },
-                   unit: energyValue?.unit.rawValue ?? "kcal",
-                   caption: energyValue == nil ? "Energy is not stated on the label. \(basisCaption)." : basisCaption)
+        HStack(spacing: 14) {
+            Image(systemName: "flame.fill")
+                .font(.title2)
+                .frame(width: 44, height: 44)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Energy, \(basisCaption)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text(energyValue.map { Fmt.number($0.amount) } ?? "–")
+                        .font(.system(size: 34, weight: .bold, design: .rounded))
+                    if let energyValue {
+                        Text(energyValue.unit.rawValue)
+                            .font(.subheadline.weight(.medium))
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Text("not stated on the label")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .card(padding: 16)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Energy \(basisCaption): \(energyValue?.text ?? "not stated on the label")")
 
-        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 3), spacing: 10) {
-            ForEach(assessment.facts.filter { $0.nutrient != .energy }) { fact in
+        let pages = pages
+        if typeSize.isAccessibilitySize {
+            // At accessibility text sizes three tiles do not fit side by side, so every nutrient gets its own row.
+            ForEach(pages.flatMap { $0 }) { fact in
                 MetricTile(nutrient: fact.nutrient,
                            value: shown(fact)?.text,
                            caption: fact.labelValue == nil ? "not stated" : nil,
                            emphasised: fact.isFocus)
             }
+        } else {
+        ScrollView(.horizontal) {
+            HStack(spacing: 0) {
+                ForEach(Array(pages.enumerated()), id: \.offset) { index, facts in
+                    HStack(spacing: 10) {
+                        ForEach(facts) { fact in
+                            MetricTile(nutrient: fact.nutrient,
+                                       value: shown(fact)?.text,
+                                       caption: fact.labelValue == nil ? "not stated" : nil,
+                                       emphasised: fact.isFocus)
+                        }
+                        ForEach(0..<(3 - facts.count), id: \.self) { _ in
+                            Color.clear.frame(maxWidth: .infinity)
+                        }
+                    }
+                    .containerRelativeFrame(.horizontal)
+                    .id(index)
+                }
+            }
+            .scrollTargetLayout()
+        }
+        .scrollTargetBehavior(.paging)
+        .scrollPosition(id: $page)
+        .scrollIndicators(.hidden)
+
+        HStack(spacing: 6) {
+            ForEach(pages.indices, id: \.self) { index in
+                Circle()
+                    .fill(index == (page ?? 0) ? Color.primary : Color.clear)
+                    .overlay(Circle().strokeBorder(Color.primary.opacity(index == (page ?? 0) ? 1 : 0.4)))
+                    .frame(width: 7, height: 7)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .accessibilityHidden(true)
         }
 
         if let block = assessment.calculation.blocked {
             Footnote("Portion figures are not shown. \(block.explanation)").padding(.horizontal, 4)
         } else {
-            Footnote("Portion figures are the label values multiplied for the portion you chose. Outlined tiles are in your current focus.")
+            Footnote("\(typeSize.isAccessibilitySize ? "" : "Swipe for more nutrients. ")Portion figures are the label values multiplied for the portion you chose. Outlined tiles are in your current focus.")
                 .padding(.horizontal, 4)
         }
     }
