@@ -33,7 +33,7 @@ struct ScanFlow: View {
                         path.append(.assessment(confirmed))
                     }
                 case .assessment(let label):
-                    AssessmentScreen(label: label) { dismiss() }
+                    AssessmentScreen(label: label, image: images.first) { dismiss() }
                 }
             }
         }
@@ -90,6 +90,7 @@ struct CaptureView: View {
                 }
             }
         }
+        .themedForm()
         .navigationTitle("Scan a label")
         .navigationBarTitleDisplayMode(.inline)
     }
@@ -239,14 +240,15 @@ struct ConfirmLabelView: View {
                 Button {
                     if let confirmed = draft.confirmed() { onConfirm(confirmed) }
                 } label: {
-                    Text("See assessment").frame(maxWidth: .infinity)
+                    Text("See assessment")
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(PrimaryButtonStyle())
                 .disabled(!issues.isEmpty)
                 .listRowInsets(EdgeInsets())
                 .listRowBackground(Color.clear)
             }
         }
+        .themedForm()
         .navigationTitle("Confirm the label")
         .navigationBarTitleDisplayMode(.inline)
     }
@@ -282,6 +284,8 @@ struct AssessmentScreen: View {
 
     @Environment(AppStore.self) private var store
     let label: ConfirmedLabel
+    /// The first label photo of this scan, shown as a header. Memory only; never stored.
+    var image: UIImage?
     let onDone: () -> Void
 
     @State private var mode: PortionMode = .servings
@@ -303,60 +307,27 @@ struct AssessmentScreen: View {
 
     var body: some View {
         let current = assessment
-        List {
-            Section {
-                Picker("Portion measured in", selection: $mode) {
-                    ForEach(PortionMode.allCases) { mode in
-                        Text(mode.title).tag(mode)
-                    }
+        ScrollView {
+            VStack(spacing: 0) {
+                hero
+                VStack(alignment: .leading, spacing: 14) {
+                    AssessmentTitleCard(assessment: current)
+                    portionCard
+                    AssessmentNutrition(assessment: current)
+                    AssessmentDetails(assessment: current)
+                    Footnote("Saving is optional. Nothing is kept unless you save, and the app never assumes you ate something you scanned.")
+                        .padding(.horizontal, 4)
                 }
-                .pickerStyle(.segmented)
-                HStack {
-                    Text(mode == .servings ? "Number of servings" : "Amount")
-                    Spacer()
-                    TextField("0", text: $amountText)
-                        .keyboardType(.decimalPad)
-                        .multilineTextAlignment(.trailing)
-                        .frame(maxWidth: 90)
-                        .accessibilityLabel("Portion amount")
-                    if mode == .amount {
-                        Picker("Portion unit", selection: $unit) {
-                            ForEach(QuantityUnit.allCases) { unit in
-                                Text(unit.rawValue).tag(unit)
-                            }
-                        }
-                        .labelsHidden()
-                        .pickerStyle(.menu)
-                    }
-                }
-            } header: {
-                Text("Your portion")
-            } footer: {
-                Text("You choose the portion. The app only does the arithmetic and does not suggest how much to eat.")
-            }
-
-            AssessmentSections(assessment: current)
-
-            Section {
-                if let savedAction {
-                    Label("Saved as \"\(savedAction.title)\". You can delete it under History.", systemImage: "checkmark.circle")
-                } else {
-                    Menu {
-                        ForEach(DecisionAction.allCases) { action in
-                            Button(action.title) {
-                                store.saveDecision(assessment: current, action: action)
-                                savedAction = action
-                            }
-                        }
-                    } label: {
-                        Label("Save decision", systemImage: "tray.and.arrow.down")
-                    }
-                }
-                Button("Done", action: onDone)
-            } footer: {
-                Text("Saving is optional. Nothing is kept unless you save, and the app never assumes you ate something you scanned.")
+                .padding(.horizontal, 16)
+                .padding(.top, 20)
+                .padding(.bottom, 12)
+                .background(Theme.background, in: UnevenRoundedRectangle(topLeadingRadius: 30, topTrailingRadius: 30, style: .continuous))
+                .padding(.top, -30)
             }
         }
+        .background(Theme.background.ignoresSafeArea())
+        .scrollDismissesKeyboard(.interactively)
+        .safeAreaInset(edge: .bottom, spacing: 0) { actions(current) }
         .navigationTitle("Assessment")
         .navigationBarTitleDisplayMode(.inline)
         .onChange(of: portion) {
@@ -368,108 +339,253 @@ struct AssessmentScreen: View {
             if label.basis == .per100ml || label.serving?.unit == .millilitre { unit = .millilitre }
         }
     }
+
+    @ViewBuilder private var hero: some View {
+        if let image {
+            Color.clear
+                .frame(height: 250)
+                .overlay {
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFill()
+                }
+                .clipped()
+                .accessibilityLabel("Your label photo. It is not saved.")
+        } else {
+            LinearGradient(colors: [Color.orange.opacity(0.25), Color.pink.opacity(0.15), Theme.accent.opacity(0.2)],
+                           startPoint: .topLeading, endPoint: .bottomTrailing)
+                .frame(height: 130)
+                .overlay {
+                    Image(systemName: "text.viewfinder")
+                        .font(.system(size: 40, weight: .light))
+                        .foregroundStyle(.secondary)
+                        .padding(.bottom, 24)
+                }
+                .accessibilityHidden(true)
+        }
+    }
+
+    private var portionCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            CardTitle("Your portion")
+            Picker("Portion measured in", selection: $mode) {
+                ForEach(PortionMode.allCases) { mode in
+                    Text(mode.title).tag(mode)
+                }
+            }
+            .pickerStyle(.segmented)
+            HStack {
+                Text(mode == .servings ? "Number of servings" : "Amount")
+                Spacer()
+                TextField("0", text: $amountText)
+                    .keyboardType(.decimalPad)
+                    .multilineTextAlignment(.trailing)
+                    .font(.headline)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .frame(maxWidth: 100)
+                    .background(Theme.chip, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .accessibilityLabel("Portion amount")
+                if mode == .amount {
+                    Picker("Portion unit", selection: $unit) {
+                        ForEach(QuantityUnit.allCases) { unit in
+                            Text(unit.rawValue).tag(unit)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                }
+            }
+            Footnote("You choose the portion. The app only does the arithmetic and does not suggest how much to eat.")
+        }
+        .card()
+    }
+
+    private func actions(_ current: Assessment) -> some View {
+        VStack(spacing: 10) {
+            if let savedAction {
+                Label("Saved as \"\(savedAction.title)\". You can delete it under History.", systemImage: "checkmark.circle.fill")
+                    .font(.footnote)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Button("Done", action: onDone)
+                    .buttonStyle(PrimaryButtonStyle())
+            } else {
+                HStack(spacing: 10) {
+                    Button("Done", action: onDone)
+                        .buttonStyle(SecondaryButtonStyle())
+                    Menu {
+                        ForEach(DecisionAction.allCases) { action in
+                            Button(action.title) {
+                                store.saveDecision(assessment: current, action: action)
+                                savedAction = action
+                            }
+                        }
+                    } label: {
+                        Text("Save decision")
+                            .font(.headline)
+                            .foregroundStyle(Theme.onInk)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 16)
+                            .background(Theme.ink, in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, 12)
+        .padding(.bottom, 8)
+        .background(.regularMaterial)
+    }
 }
 
-/// The read-only body of an assessment, shared by the live screen and saved history.
-struct AssessmentSections: View {
+// MARK: - Read-only assessment cards, shared by the live screen and saved history
+
+struct AssessmentTitleCard: View {
     let assessment: Assessment
 
     var body: some View {
-        Section {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(assessment.label.productName)
+                .font(.system(.title2, design: .rounded, weight: .bold))
+                .accessibilityAddTraits(.isHeader)
             if assessment.label.isSample { SampleBadge() }
             PrototypeBanner(text: "Draft assessment. Not clinically reviewed advice.")
         }
+        .card()
+    }
+}
 
-        Section {
-            ForEach(assessment.summary, id: \.self) { line in
-                Text(line)
+/// Energy and the other nutrients as tiles. Shows portion figures when they can be worked out,
+/// otherwise the label's own figures. An unknown value is a dash, never a zero.
+struct AssessmentNutrition: View {
+    let assessment: Assessment
+
+    private var showsPortion: Bool { assessment.calculation.blocked == nil }
+    private var basisCaption: String {
+        showsPortion ? "For your portion: \(assessment.calculation.portion.text)"
+                     : "As printed on the label, \(assessment.label.basis.title)"
+    }
+
+    private func shown(_ fact: FactLine) -> NutrientValue? {
+        showsPortion ? fact.portionValue : fact.labelValue
+    }
+
+    var body: some View {
+        let energy = assessment.facts.first { $0.nutrient == .energy }
+        let energyValue = energy.flatMap(shown)
+        EnergyCard(value: energyValue.map { Fmt.number($0.amount) },
+                   unit: energyValue?.unit.rawValue ?? "kcal",
+                   caption: energyValue == nil ? "Energy is not stated on the label. \(basisCaption)." : basisCaption)
+
+        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 3), spacing: 10) {
+            ForEach(assessment.facts.filter { $0.nutrient != .energy }) { fact in
+                MetricTile(nutrient: fact.nutrient,
+                           value: shown(fact)?.text,
+                           caption: fact.labelValue == nil ? "not stated" : nil,
+                           emphasised: fact.isFocus)
             }
-        } header: {
-            Text(assessment.goal.map { "Summary for: \($0.title)" } ?? "Summary")
         }
 
-        Section {
-            let allergen = assessment.allergen
+        if let block = assessment.calculation.blocked {
+            Footnote("Portion figures are not shown. \(block.explanation)").padding(.horizontal, 4)
+        } else {
+            Footnote("Portion figures are the label values multiplied for the portion you chose. Outlined tiles are in your current focus.")
+                .padding(.horizontal, 4)
+        }
+    }
+}
+
+struct AssessmentDetails: View {
+    let assessment: Assessment
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            CardTitle(assessment.goal.map { "Summary for: \($0.title)" } ?? "Summary")
+            ForEach(assessment.summary, id: \.self) { line in
+                Text(line).font(.subheadline)
+            }
+        }
+        .card()
+
+        let allergen = assessment.allergen
+        VStack(alignment: .leading, spacing: 10) {
+            CardTitle("Allergy check")
             Label(allergen.headline, systemImage: allergen.status == .matchFound ? "exclamationmark.triangle.fill" : "info.circle")
-                .font(.body.weight(.semibold))
+                .font(.subheadline.weight(.semibold))
                 .foregroundStyle(allergen.status == .matchFound ? Color.red : Color.primary)
             ForEach(allergen.matches) { match in
                 Text("\(match.allergen.title): found \"\(match.term)\" in \(match.source == .ingredients ? "the ingredients" : "the precautionary statement").")
+                    .font(.subheadline)
             }
             ForEach(allergen.gaps, id: \.self) { gap in
-                Text(gap)
+                Text(gap).font(.subheadline)
             }
-            Text(allergen.detail)
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-        } header: {
-            Text("Allergy check")
+            Footnote(allergen.detail)
+        }
+        .card()
+        .overlay {
+            if allergen.status == .matchFound {
+                RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous).strokeBorder(Color.red.opacity(0.6), lineWidth: 1.5)
+            }
         }
 
-        Section {
+        VStack(alignment: .leading, spacing: 10) {
+            CardTitle("Confirmed label facts")
             ForEach(assessment.facts) { fact in
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(fact.nutrient.title)
-                        .font(.body.weight(fact.isFocus ? .semibold : .regular))
-                    Text(fact.labelValue.map { "Label: \($0.text) \(assessment.label.basis.title)" } ?? "Label: not stated")
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Image(systemName: fact.nutrient.symbol)
                         .font(.footnote)
-                        .foregroundStyle(.secondary)
-                    if let portionValue = fact.portionValue {
-                        Text("Your portion (\(assessment.calculation.portion.text)): \(portionValue.text)")
-                            .font(.footnote)
-                    }
+                        .foregroundStyle(fact.nutrient.tint)
+                        .frame(width: 20)
+                    Text(fact.nutrient.title)
+                        .fontWeight(fact.isFocus ? .semibold : .regular)
+                    Spacer(minLength: 8)
+                    Text(fact.labelValue?.text ?? "not stated")
+                        .foregroundStyle(fact.labelValue == nil ? .secondary : .primary)
                 }
+                .font(.subheadline)
                 .accessibilityElement(children: .combine)
             }
-        } header: {
-            Text("Confirmed label facts")
-        } footer: {
-            if let block = assessment.calculation.blocked {
-                Text("Portion figures are not shown. \(block.explanation)")
-            } else {
-                Text("Portion figures are the label values multiplied for the portion you chose.")
-            }
+            Footnote("Values as you confirmed them, \(assessment.label.basis.title).")
         }
+        .card()
 
         if !assessment.missing.isEmpty {
-            Section("Missing or uncertain") {
+            VStack(alignment: .leading, spacing: 10) {
+                CardTitle("Missing or uncertain")
                 ForEach(assessment.missing, id: \.self) { item in
-                    Label(item, systemImage: "questionmark.circle")
+                    Label(item, systemImage: "questionmark.circle").font(.subheadline)
                 }
             }
+            .card()
         }
 
-        Section {
-            Text(assessment.nextStep.text)
-        } header: {
-            Text(assessment.nextStep.evidenceCardID == nil ? "A practical next step" : "Suggested next step")
-        } footer: {
-            Text(assessment.guidanceNote)
+        VStack(alignment: .leading, spacing: 10) {
+            CardTitle(assessment.nextStep.evidenceCardID == nil ? "A practical next step" : "Suggested next step")
+            Text(assessment.nextStep.text).font(.subheadline)
+            Footnote(assessment.guidanceNote)
         }
+        .card()
 
-        Section {
+        VStack(alignment: .leading, spacing: 10) {
+            CardTitle("Sources and review status")
             if assessment.evidenceCards.isEmpty {
-                Text("No evidence card applies.")
+                Text("No evidence card applies.").font(.subheadline)
             }
             ForEach(assessment.evidenceCards) { card in
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(card.claim)
-                    Text("Status: \(card.state.title) · version \(card.version)")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
+                    Text(card.claim).font(.subheadline)
+                    Footnote("Status: \(card.state.title) · version \(card.version)")
                     ForEach(card.sources) { source in
-                        Text("\(source.title). \(source.dateDescription)")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
+                        Footnote("\(source.title). \(source.dateDescription)")
                     }
                 }
             }
-            LabeledContent("Rule version", value: assessment.ruleVersion)
-            LabeledContent("Label confirmed", value: Fmt.date(assessment.label.confirmedAt))
-        } header: {
-            Text("Sources and review status")
-        } footer: {
-            Text("Draft cards are listed for transparency and are not used to give advice.")
+            InfoRow(title: "Rule version", value: assessment.ruleVersion)
+            InfoRow(title: "Label confirmed", value: Fmt.date(assessment.label.confirmedAt))
+            Footnote("Draft cards are listed for transparency and are not used to give advice.")
         }
+        .card()
     }
 }

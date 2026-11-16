@@ -508,3 +508,55 @@ final class TextRecognitionTests: XCTestCase {
         XCTAssertTrue(draft.ingredientsText.lowercased().contains("almonds"), recognised)
     }
 }
+
+@MainActor
+final class IntakeTests: XCTestCase {
+    private func saved(_ draft: LabelDraft, portion: Portion, in store: AppStore, action: DecisionAction, at date: Date) {
+        let label = draft.confirmedForTest()
+        let assessment = AssessmentEngine.assess(label: label, profile: store.profile, portion: portion, now: date, id: UUID())
+        store.saveDecision(assessment: assessment, action: action, now: date)
+    }
+
+    func testOnlyItemsSavedAsEatenOnThatDayAreCounted() {
+        let store = AppStore(persistence: MemoryPersistence())
+        let today = Date(timeIntervalSince1970: 1_800_000_000)
+        let yesterday = today.addingTimeInterval(-86_400)
+        saved(SampleProducts.proteinBar, portion: .servings(1), in: store, action: .ate, at: today)
+        saved(SampleProducts.proteinBar, portion: .servings(1), in: store, action: .considering, at: today)
+        saved(SampleProducts.proteinBar, portion: .servings(1), in: store, action: .ate, at: yesterday)
+
+        let summary = IntakeMath.summary(of: store.eaten(on: today))
+        XCTAssertEqual(summary.itemCount, 1)
+        XCTAssertEqual(summary.total(.energy), 210)
+    }
+
+    func testUnknownIsLeftOutAndNeverCountedAsZero() {
+        let store = AppStore(persistence: MemoryPersistence())
+        let day = Date(timeIntervalSince1970: 1_800_000_000)
+        var blank = LabelDraft()
+        blank.productName = "No figures"
+        blank.basis = .perServing
+        blank.ingredientsUnavailable = true
+        blank.precautionaryMode = .noneOnPackage
+        saved(blank, portion: .servings(1), in: store, action: .ate, at: day)
+
+        let summary = IntakeMath.summary(of: store.eaten(on: day))
+        XCTAssertEqual(summary.itemCount, 1)
+        XCTAssertNil(summary.total(.energy))
+        XCTAssertEqual(summary.unknownCount(.energy), 1)
+    }
+
+    func testEnergyInKilojoulesAndMilligramsAreConverted() {
+        XCTAssertEqual(IntakeMath.normalised(NutrientValue(amount: 418.4, unit: .kJ)), 100, accuracy: 0.001)
+        XCTAssertEqual(IntakeMath.normalised(NutrientValue(amount: 500, unit: .mg)), 0.5, accuracy: 0.001)
+    }
+}
+
+private extension LabelDraft {
+    func confirmedForTest() -> ConfirmedLabel {
+        var copy = self
+        copy.checkedNutrition = true
+        copy.checkedIngredients = true
+        return copy.confirmed()!
+    }
+}

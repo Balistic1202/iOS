@@ -8,6 +8,7 @@ struct HealthCompanionApp: App {
         WindowGroup {
             RootView()
                 .environment(store)
+                .tint(Theme.accent)
         }
     }
 }

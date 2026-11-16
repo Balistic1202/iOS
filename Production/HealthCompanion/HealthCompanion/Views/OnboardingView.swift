@@ -20,6 +20,7 @@ struct OnboardingView: View {
                 case .review: review
                 }
             }
+            .themedForm()
             .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -131,10 +132,9 @@ struct OnboardingView: View {
         Button(action: action) {
             Text(title).frame(maxWidth: .infinity)
         }
-        .buttonStyle(.borderedProminent)
-        .controlSize(.large)
+        .buttonStyle(PrimaryButtonStyle())
         .disabled(disabled)
-        .padding()
-        .background(.bar)
+        .padding(.horizontal, 20)
+        .padding(.vertical, 10)
     }
 }
