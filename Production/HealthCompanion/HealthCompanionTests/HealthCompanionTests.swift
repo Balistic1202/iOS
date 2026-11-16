@@ -332,3 +332,179 @@ final class StoreTests: XCTestCase {
         XCTAssertEqual(store.profile?.goals, [.reduceSugar, .buildMuscle])
     }
 }
+
+final class LabelTextParserTests: XCTestCase {
+    private let european = """
+    NUTRITION per 100 g
+    Energy 1890 kJ / 450 kcal
+    Fat 15 g, of which saturates 3,0 g
+    Carbohydrate 62 g, of which sugars 24 g
+    Fibre 7 g
+    Protein 10 g
+    Salt 0,3 g
+    Serving 45 g. Net weight 500 g.
+    INGREDIENTS: Oats (58%), sugar, sunflower oil, honey (5%),
+    almonds (4%), coconut, salt.
+    May contain peanuts, other nuts
+    and sesame.
+    """
+
+    func testEuropeanLabelWithDecimalCommas() {
+        let draft = LabelTextParser.parse(european)
+        XCTAssertEqual(draft.basis, .per100g)
+        XCTAssertEqual(draft[.energy].text, "450")
+        XCTAssertEqual(draft[.energy].unit, .kcal)
+        XCTAssertEqual(draft[.fat].text, "15")
+        XCTAssertEqual(draft[.saturatedFat].text, "3,0")
+        XCTAssertEqual(draft[.carbohydrate].text, "62")
+        XCTAssertEqual(draft[.totalSugars].text, "24")
+        XCTAssertEqual(draft[.fibre].text, "7")
+        XCTAssertEqual(draft[.protein].text, "10")
+        XCTAssertEqual(draft[.salt].text, "0,3")
+        XCTAssertEqual(draft.servingText, "45")
+        XCTAssertEqual(draft.servingUnit, .gram)
+        XCTAssertEqual(draft.packageText, "500")
+        XCTAssertEqual(draft.ingredientsText, "Oats (58%), sugar, sunflower oil, honey (5%), almonds (4%), coconut, salt.")
+        XCTAssertEqual(draft.precautionaryMode, .hasStatement)
+        XCTAssertEqual(draft.precautionaryText, "May contain peanuts, other nuts and sesame.")
+    }
+
+    func testAddedSugarsAreNeverInferred() {
+        let draft = LabelTextParser.parse(european)
+        XCTAssertEqual(draft[.addedSugars].text, "", "Sugar in the ingredients must not become an added-sugar value")
+    }
+
+    func testScannedLabelIsNeverPreConfirmedOrMarkedSample() {
+        let draft = LabelTextParser.parse(european)
+        XCTAssertFalse(draft.isSample)
+        XCTAssertFalse(draft.checkedNutrition)
+        XCTAssertFalse(draft.checkedIngredients)
+        XCTAssertNil(draft.confirmed())
+    }
+
+    func testAmericanStylePerServingLabel() {
+        let text = """
+        Nutrition Facts
+        Serving size 2/3 cup (55g)
+        Amount per serving
+        Calories 230
+        Total Fat 8g
+        Saturated Fat 1g
+        Trans Fat 0g
+        Sodium 160mg
+        Total Carbohydrate 37g
+        Dietary Fiber 4g
+        Total Sugars 12g
+        Includes 10g Added Sugars
+        Protein 3g
+        """
+        let draft = LabelTextParser.parse(text)
+        XCTAssertEqual(draft.basis, .perServing)
+        XCTAssertEqual(draft[.energy].text, "230")
+        XCTAssertEqual(draft[.fat].text, "8")
+        XCTAssertEqual(draft[.saturatedFat].text, "1")
+        XCTAssertEqual(draft[.carbohydrate].text, "37")
+        XCTAssertEqual(draft[.fibre].text, "4")
+        XCTAssertEqual(draft[.totalSugars].text, "12")
+        XCTAssertEqual(draft[.addedSugars].text, "10")
+        XCTAssertEqual(draft[.protein].text, "3")
+        XCTAssertEqual(draft[.salt].text, "", "Sodium is not salt and is not converted")
+        XCTAssertEqual(draft.servingText, "55")
+        XCTAssertEqual(draft.precautionaryMode, .notProvided, "No statement found is not the same as none on the package")
+    }
+
+    func testValuesOnTheFollowingLineAndPer100ml() {
+        let text = """
+        Typical values per 100 ml
+        Energy
+        251 kJ
+        Protein
+        8.0 g
+        Sugars
+        4.8 g
+        """
+        let draft = LabelTextParser.parse(text)
+        XCTAssertEqual(draft.basis, .per100ml)
+        XCTAssertEqual(draft[.energy].text, "251")
+        XCTAssertEqual(draft[.energy].unit, .kJ)
+        XCTAssertEqual(draft[.protein].text, "8.0")
+        XCTAssertEqual(draft[.totalSugars].text, "4.8")
+    }
+
+    func testUnreadableOrLessThanValuesStayBlank() {
+        let text = """
+        per 100 g
+        Fat <0.5 g
+        Protein trace
+        Salt
+        """
+        let draft = LabelTextParser.parse(text)
+        XCTAssertEqual(draft[.fat].text, "")
+        XCTAssertEqual(draft[.protein].text, "")
+        XCTAssertEqual(draft[.salt].text, "")
+    }
+
+    func testNoBasisIsLeftForTheUserToChoose() {
+        let draft = LabelTextParser.parse("Energy 450 kcal\nProtein 10 g")
+        XCTAssertNil(draft.basis)
+        XCTAssertTrue(draft.issues.contains { $0.contains("per 100 g") })
+    }
+
+    func testIngredientsOnlyPhotoYieldsNoNutritionValues() {
+        let draft = LabelTextParser.parse("Ingredients: wheat flour, sugar (12%), salt, fat 3 types.")
+        for nutrient in Nutrient.allCases {
+            XCTAssertEqual(draft[nutrient].text, "", nutrient.title)
+        }
+        XCTAssertTrue(draft.ingredientsText.hasPrefix("wheat flour"))
+    }
+
+    func testSecondPhotoFillsBlanksWithoutOverwritingAndClearsConfirmation() {
+        var draft = LabelTextParser.parse("per 100 g\nEnergy 450 kcal\nProtein 10 g")
+        draft[.protein].text = "11"
+        draft.checkedNutrition = true
+        draft.checkedIngredients = true
+
+        LabelTextParser.merge("Protein 99 g\nFibre 7 g\nIngredients: oats, almonds.\nMay contain sesame.", into: &draft)
+
+        XCTAssertEqual(draft[.protein].text, "11", "A correction is never overwritten")
+        XCTAssertEqual(draft[.fibre].text, "7")
+        XCTAssertEqual(draft.ingredientsText, "oats, almonds.")
+        XCTAssertEqual(draft.precautionaryText, "May contain sesame.")
+        XCTAssertFalse(draft.checkedNutrition)
+        XCTAssertFalse(draft.checkedIngredients)
+        XCTAssertTrue(draft.rawText.contains("Protein 99 g"))
+    }
+
+    func testPackageSizeInKilogramsAndLitres() {
+        XCTAssertEqual(LabelTextParser.package(in: "Net weight 1,5 kg")?.text, "1500")
+        XCTAssertEqual(LabelTextParser.package(in: "Net contents: 1 L")?.unit, .millilitre)
+        XCTAssertEqual(LabelTextParser.package(in: "Net contents: 1 L")?.text, "1000")
+    }
+}
+
+final class TextRecognitionTests: XCTestCase {
+    /// Renders a clean label and reads it back through Vision, then through the parser.
+    func testRecognisesRenderedLabelOnDevice() async throws {
+        let text = "NUTRITION per 100 g\nEnergy 450 kcal\nProtein 10 g\nSugars 24 g\nINGREDIENTS: Oats, sugar, almonds."
+        let size = CGSize(width: 1000, height: 700)
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        let image = UIGraphicsImageRenderer(size: size, format: format).image { context in
+            UIColor.white.setFill()
+            context.fill(CGRect(origin: .zero, size: size))
+            (text as NSString).draw(in: CGRect(x: 50, y: 50, width: 900, height: 600), withAttributes: [
+                .font: UIFont.systemFont(ofSize: 48),
+                .foregroundColor: UIColor.black,
+            ])
+        }
+
+        let recognised = try await TextRecognizer.recognize(image)
+        let draft = LabelTextParser.parse(recognised)
+
+        XCTAssertEqual(draft.basis, .per100g, recognised)
+        XCTAssertEqual(draft[.energy].text, "450", recognised)
+        XCTAssertEqual(draft[.protein].text, "10", recognised)
+        XCTAssertEqual(draft[.totalSugars].text, "24", recognised)
+        XCTAssertTrue(draft.ingredientsText.lowercased().contains("almonds"), recognised)
+    }
+}

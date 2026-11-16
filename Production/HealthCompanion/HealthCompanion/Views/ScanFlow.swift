@@ -10,11 +10,14 @@ struct ScanFlow: View {
     @Environment(\.dismiss) private var dismiss
     @State private var path: [Route] = []
     @State private var draft = LabelDraft()
+    /// Label photos for this scan. Held in memory only and gone when the flow closes.
+    @State private var images: [UIImage] = []
 
     var body: some View {
         NavigationStack(path: $path) {
-            CaptureView { chosen in
+            CaptureView { chosen, image in
                 draft = chosen
+                images = image.map { [$0] } ?? []
                 path = [.confirm]
             }
             .toolbar {
@@ -25,7 +28,7 @@ struct ScanFlow: View {
             .navigationDestination(for: Route.self) { route in
                 switch route {
                 case .confirm:
-                    ConfirmLabelView(draft: $draft) { confirmed in
+                    ConfirmLabelView(draft: $draft, images: $images) { confirmed in
                         // The label travels with the route, so the destination never reads stale state.
                         path.append(.assessment(confirmed))
                     }
@@ -40,31 +43,30 @@ struct ScanFlow: View {
 // MARK: - Capture
 
 struct CaptureView: View {
-    let onChoose: (LabelDraft) -> Void
+    let onChoose: (LabelDraft, UIImage?) -> Void
 
     var body: some View {
         List {
             Section {
-                Text("In this prototype, label details are handled on this device only. Photos are not kept, and nothing is sent anywhere.")
+                Text("Your photo is read on this device to find the label text. It is not saved and nothing is sent anywhere. Only the details you confirm, and choose to save, are kept.")
             } header: {
                 Text("How your label is handled")
             }
 
             Section {
-                Label("Photograph a label", systemImage: "camera")
-                    .foregroundStyle(.secondary)
-                Label("Import a photo", systemImage: "photo")
-                    .foregroundStyle(.secondary)
+                LabelPhotoSource { text, image in
+                    onChoose(LabelTextParser.parse(text), image)
+                }
             } header: {
                 Text("From the package")
             } footer: {
-                Text("Camera and photo import are not built yet. They arrive in the next step, with on-device text recognition.")
+                Text("Photograph the nutrition table and the ingredients. If they are on different sides, you can add a second photo on the next screen. Text reading makes mistakes, so you will check every field.")
             }
 
             Section {
                 ForEach(Array(SampleProducts.all.enumerated()), id: \.offset) { _, sample in
                     Button {
-                        onChoose(sample)
+                        onChoose(sample, nil)
                     } label: {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(sample.productName)
@@ -82,7 +84,7 @@ struct CaptureView: View {
 
             Section {
                 Button {
-                    onChoose(LabelDraft())
+                    onChoose(LabelDraft(), nil)
                 } label: {
                     Label("Enter a label by hand", systemImage: "keyboard")
                 }
@@ -97,6 +99,7 @@ struct CaptureView: View {
 
 struct ConfirmLabelView: View {
     @Binding var draft: LabelDraft
+    @Binding var images: [UIImage]
     let onConfirm: (ConfirmedLabel) -> Void
 
     var body: some View {
@@ -105,15 +108,44 @@ struct ConfirmLabelView: View {
                 Section { SampleBadge() }
             }
 
+            if !draft.isSample {
+                Section {
+                    if !images.isEmpty {
+                        ScrollView(.horizontal) {
+                            HStack(spacing: 12) {
+                                ForEach(Array(images.enumerated()), id: \.offset) { index, image in
+                                    Image(uiImage: image)
+                                        .resizable()
+                                        .scaledToFit()
+                                        .frame(height: 260)
+                                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                                        .accessibilityLabel("Label photo \(index + 1)")
+                                }
+                            }
+                        }
+                    }
+                    LabelPhotoSource(cameraTitle: "Add a photo with the camera", importTitle: "Add a photo from the library") { text, image in
+                        LabelTextParser.merge(text, into: &draft)
+                        images.append(image)
+                    }
+                } header: {
+                    Text(images.isEmpty ? "Label photos" : "Your label photos")
+                } footer: {
+                    Text("Photos are used only to read the label and are not saved. A further photo fills in blank fields and never overwrites what is already there.")
+                }
+            }
+
             if !draft.rawText.isEmpty {
                 Section {
                     Text(draft.rawText)
                         .font(.footnote.monospaced())
                         .textSelection(.enabled)
                 } header: {
-                    Text("Label text")
+                    Text(draft.isSample ? "Label text" : "Text read from your photos")
                 } footer: {
-                    Text("Compare each field below with this text, and with the package itself.")
+                    Text(draft.isSample
+                         ? "Compare each field below with this text, and with the package itself."
+                         : "Text reading can misread digits, units and decimal points. Fields the app could not read are left blank. Check each one against the package itself.")
                 }
             }
 
